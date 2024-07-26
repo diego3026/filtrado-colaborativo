@@ -41,12 +41,7 @@ class InmuebleUsuarioNormalizado:
         self.puntaje_preferencia = puntaje_preferencia
 
     def get_clasificacion(self):
-        clasificacion = (
-            self.pesos[0] * self.favorito +
-            self.pesos[1] * self.calificacion +
-            self.pesos[2] * self.clics +
-            self.pesos[3] * self.puntaje_preferencia
-        )
+        clasificacion = self.pesos[0] * self.favorito + self.pesos[1] * self.calificacion + self.pesos[2] * self.clics + self.pesos[3] * self.puntaje_preferencia
         return clasificacion
 
 def get_token():
@@ -139,7 +134,7 @@ def puntajes_usuarios(coincidencias_todos_usuarios, vCoincidenciasPorUsuario):
         if valorCoincidenciaUsuario:
             for coincidencia in coincidencias:
                 puntaje = len(coincidencia[1]) * valorCoincidenciaUsuario["valorCoincidencia"]
-                puntajes_por_inmueble.append({"idimueble": coincidencia[0], "puntaje": puntaje})
+                puntajes_por_inmueble.append({"idInmueble": coincidencia[0], "puntaje": puntaje})
         puntaje_por_usuarios.append({"usuario": usuario, "puntajePorInmueble": puntajes_por_inmueble})
     return puntaje_por_usuarios
 
@@ -157,6 +152,28 @@ def obtener_datosLimpios(inmuebles,usuarios):
 
     return datosLimpios
 
+def comprobarId(datos,idInmueble):
+    for diccionario in datos:
+        id = diccionario['idInmueble']
+        if (id == idInmueble):
+            return id
+    
+    return -1
+
+def obtenerValores(usuario,id_inmueble,datos):
+    for entrada in datos:
+        if entrada['usuario'] == usuario and entrada['inmueble'] == id_inmueble:
+            return {
+                'numeroDeClics': entrada.get('numeroDeClicks'),
+                'favorito': entrada.get('favorito'),
+                'calificacion': entrada.get('calificacion')
+            }
+    return {
+                'numeroDeClics': None,
+                'favorito': None,
+                'calificacion': None
+            }
+
 def calcular_clasificaciones(datos, puntajes_por_usuarios, pesos,datosLimpios):
     calificaciones, clics, favoritos = [], [], []
     for item in datos:
@@ -172,27 +189,23 @@ def calcular_clasificaciones(datos, puntajes_por_usuarios, pesos,datosLimpios):
     max_clics = max(clics) if len(clics) else 0
     promedio_favoritos = sum(favoritos) / len(favoritos) if len(favoritos) else 0
 
-    for value in datos:
-        id_inmueble = value['inmueble']
-        usuario = value['usuario']
-        calificacion = normalizacion(value['calificacion'], 5, 1) if value['calificacion'] else promedio_calificaciones
-        favorito = int(value['favorito']) if value['favorito'] else promedio_favoritos
-        clics = normalizacion(value['numeroDeClicks'], max_clics, 0) if value['numeroDeClicks'] and max_clics > 0 else promedio_clics
+    for usuarios in puntajes_por_usuarios:
+        for puntajesPorInmueble in usuarios['puntajePorInmueble']:
+            id_inmueble = puntajesPorInmueble['idInmueble']
+            usuario = usuarios['usuario']
+            valores = obtenerValores(usuario=usuario,id_inmueble=id_inmueble,datos=datos)
+            calificacion = normalizacion(valores['calificacion'], 5, 1) if valores['calificacion'] is not None else promedio_calificaciones
+            favorito = int(valores['favorito']) if valores['favorito'] is not None else promedio_favoritos
+            clics = normalizacion(valores['numeroDeClics'], max_clics, 0) if valores['numeroDeClics'] is not None and max_clics > 0 else promedio_clics
 
-        preferencia = 0
-        index_usuario = next((i for i, dic in enumerate(puntajes_por_usuarios) if dic["usuario"] == usuario), -1)
-        if index_usuario != -1:
-            puntajes_usuario = puntajes_por_usuarios[index_usuario]['puntajePorInmueble']
-            index_inmueble = next((i for i, dic in enumerate(puntajes_usuario) if dic["idimueble"] == id_inmueble), -1)
-            if index_inmueble != -1:
-                preferencia = puntajes_usuario[index_inmueble]['puntaje']
-
-        if id_inmueble and usuario:
-            inmueble_por_usuario = InmuebleUsuarioNormalizado(
-                inmueble=id_inmueble, usuario=usuario, calificacion=calificacion,
-                favorito=favorito, clics=clics, puntaje_preferencia=preferencia, pesos=pesos
-            )
-            datosLimpios[usuario][id_inmueble] = inmueble_por_usuario.get_clasificacion()
+            preferencia = puntajesPorInmueble['puntaje']
+            if id_inmueble and usuario:
+                inmueble_por_usuario = InmuebleUsuarioNormalizado(
+                    inmueble=id_inmueble, usuario=usuario, calificacion=calificacion,
+                    favorito=favorito, clics=clics, puntaje_preferencia=preferencia, pesos=pesos
+                )
+                datosLimpios[usuario][id_inmueble] = inmueble_por_usuario.get_clasificacion()
+        
     return datosLimpios
 
 def guardar_datos(datosLimpios, nombre_archivo='datosLimpios.json'):
@@ -217,10 +230,11 @@ def predecir_valoraciones(user, ratings_df, sim_df):
 
 def generar_recomendaciones(usuario, datosLimpios):
     ratings_df = pd.DataFrame(datosLimpios).T
-    cosine_sim = cosine_similarity(ratings_df.fillna(0))
+    ratings_df = ratings_df.infer_objects()
+    ratings_df_filled = ratings_df.fillna(0)
+    cosine_sim = cosine_similarity(ratings_df_filled)
     cosine_sim_df = pd.DataFrame(cosine_sim, index=ratings_df.index, columns=ratings_df.index)
     predicted_ratings = predecir_valoraciones(usuario, ratings_df, cosine_sim_df)
-    print(predicted_ratings)
     return predicted_ratings.index.tolist()
 
 def main():
@@ -236,14 +250,14 @@ def main():
     inmuebles_con_caracteristicas = procesar_inmuebles(inmuebles)
     coincidencias_todos_usuarios = calcular_coincidencias(intereses_por_usuario, inmuebles_con_caracteristicas)
     vCoincidenciasPorUsuario = valores_coincidencia_por_usuario(intereses_por_usuario, 10)
-    puntajes_por_usuarios = puntajes_usuarios(coincidencias_todos_usuarios, vCoincidenciasPorUsuario)
+    puntajes_por_usuarios = puntajes_usuarios(coincidencias_todos_usuarios, vCoincidenciasPorUsuario)        
     datosLimpios = obtener_datosLimpios(resultados_inmuebles,resultados_usuarios)
     datos = calcular_clasificaciones(datos_api, puntajes_por_usuarios, PESOS,datosLimpios)
-    print(datos)
     # Guardar y generar recomendaciones
-    guardar_datos(datos)
-    recomendaciones = generar_recomendaciones('diego3026', datos)
-    print(f"Inmuebles recomendados para 'diego3026': {recomendaciones}")
+    # guardar_datos(datos)
+    usuario = "prueba21"
+    recomendaciones = generar_recomendaciones(usuario=usuario, datosLimpios=datos)
+    print(f"Inmuebles recomendados para ${usuario}: {recomendaciones}")
 
 if __name__ == "__main__":
     main()
